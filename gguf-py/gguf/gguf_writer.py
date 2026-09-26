@@ -564,18 +564,62 @@ class GGUFWriter:
     def add_author(self, author: str) -> None:
         self.add_string(Keys.General.AUTHOR, author)
 
-    def add_custom_alignment(self, alignment: int) -> None:
-        self.data_alignment = alignment
-        self.add_uint32(Keys.General.ALIGNMENT, alignment)
+    def add_version(self, version: str) -> None:
+        self.add_string(Keys.General.VERSION, version)
 
-    def add_file_type(self, ftype: int) -> None:
-        self.add_uint32(Keys.General.FILE_TYPE, ftype)
+    def add_organization(self, organization: str) -> None:
+        self.add_string(Keys.General.ORGANIZATION, organization)
 
-    def add_name(self, name: str) -> None:
-        self.add_string(Keys.General.NAME, name)
+    def add_finetune(self, finetune: str) -> None:
+        self.add_string(Keys.General.FINETUNE, finetune)
 
-    def add_author(self, author: str) -> None:
-        self.add_string(Keys.General.AUTHOR, author)
+    def add_basename(self, basename: str) -> None:
+        self.add_string(Keys.General.BASENAME, basename)
+
+    def add_description(self, description: str) -> None:
+        self.add_string(Keys.General.DESCRIPTION, description)
+
+    def add_quantized_by(self, quantized: str) -> None:
+        self.add_string(Keys.General.QUANTIZED_BY, quantized)
+
+    def add_size_label(self, size_label: str) -> None:
+        self.add_string(Keys.General.SIZE_LABEL, size_label)
+
+    def add_license(self, license: str) -> None:
+        self.add_string(Keys.General.LICENSE, license)
+
+    def add_license_name(self, license: str) -> None:
+        self.add_string(Keys.General.LICENSE_NAME, license)
+
+    def add_license_link(self, license: str) -> None:
+        self.add_string(Keys.General.LICENSE_LINK, license)
+
+    def add_url(self, url: str) -> None:
+        self.add_string(Keys.General.URL, url)
+
+    def add_doi(self, doi: str) -> None:
+        self.add_string(Keys.General.DOI, doi)
+
+    def add_uuid(self, uuid: str) -> None:
+        self.add_string(Keys.General.UUID, uuid)
+
+    def add_repo_url(self, repo_url: str) -> None:
+        self.add_string(Keys.General.REPO_URL, repo_url)
+
+    def add_source_url(self, url: str) -> None:
+        self.add_string(Keys.General.SOURCE_URL, url)
+
+    def add_source_doi(self, doi: str) -> None:
+        self.add_string(Keys.General.SOURCE_DOI, doi)
+
+    def add_source_uuid(self, uuid: str) -> None:
+        self.add_string(Keys.General.SOURCE_UUID, uuid)
+
+    def add_source_repo_url(self, repo_url: str) -> None:
+        self.add_string(Keys.General.SOURCE_REPO_URL, repo_url)
+
+    def add_base_model_count(self, source_count: int) -> None:
+        self.add_uint32(Keys.General.BASE_MODEL_COUNT, source_count)
 
     def add_base_model_name(self, source_id: int, name: str) -> None:
         self.add_string(Keys.General.BASE_MODEL_NAME.format(id=source_id), name)
@@ -639,6 +683,9 @@ class GGUFWriter:
 
     def add_languages(self, languages: Sequence[str]) -> None:
         self.add_array(Keys.General.LANGUAGES, languages)
+
+    def add_datasets(self, datasets: Sequence[str]) -> None:
+        self.add_array(Keys.General.DATASETS, datasets)
 
     def add_tensor_data_layout(self, layout: str) -> None:
         self.add_string(Keys.LLM.TENSOR_DATA_LAYOUT.format(arch=self.arch), layout)

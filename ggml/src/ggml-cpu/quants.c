@@ -1290,14 +1290,6 @@ void quantize_row_iq4_xs(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, 
 // ====================== BitNet I2_S AVX2 SIMD vec_dot ======================
 // ====================== BitNet I2_S quantization functions ======================
 
-#if defined(__AVX2__) || defined(__AVX512F__)
-#define QK_I2_S 128
-#elif defined(__ARM_NEON)
-#define QK_I2_S 64
-#else
-#define QK_I2_S 128
-#endif
-
 #if defined(__AVX2__)
 static inline int hsum_i32_8(const __m256i a) {
     const __m128i sum128 = _mm_add_epi32(_mm256_castsi256_si128(a), _mm256_extractf128_si256(a, 1));
@@ -1313,7 +1305,8 @@ void quantize_row_i8_s(const float * x, void * y, int64_t n, float* act_scales, 
     for (int i = 0; i < n; i++) {
         amax = MAX(amax, fabsf(x[i]));
     }
-    float s = (amax > 0.0f) ? 127.0f / amax : 0.0f;
+    // A zero row still needs a nonzero multiplier for dot/sum post-processing.
+    const float s = amax > 0.0f ? (float) MIN(127.0 / (double) amax, (double) FLT_MAX) : 1.0f;
     act_scales[0] = s;
 
     int32_t sum = 0;
@@ -1333,10 +1326,8 @@ void quantize_row_i8_s_4x1(const float * x, void * y, int64_t n, float* act_scal
 }
 
 void dequantize_row_i2_s(const uint8_t * x, float * y, int64_t n, const float i2_scale) {
-    // n = total elements in tensor (M * K), i2_scale is ignored for per-row mode
-    // Per-row scales are stored after packed ternary bytes at x + n/4
-    // But this function is called with a single scale for backward compat.
-    // When called from TL2 path, scale is applied in the kernel, not here.
+    GGML_ASSERT(n > 0 && n % 128 == 0);
+    // Decode one row; the caller supplies its scale from the slice footer.
     static const float map2bit[4] = { -1.0f, 0.0f, 1.0f, 0.0f };
     int64_t done = 0;
     while (done < n) {
@@ -1360,208 +1351,80 @@ void dequantize_row_i2_s(const uint8_t * x, float * y, int64_t n, const float i2
 }
 
 size_t quantize_i2_s(const float * src, void * dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
-    (void)quant_weights;
-    int64_t n = nrow * n_per_row;
+    GGML_UNUSED(quant_weights);
+    const size_t slice_size = ggml_i2s_slice_size(n_per_row, nrow);
+    const size_t row_bytes = n_per_row / 4;
+    uint8_t * q = (uint8_t *) dst;
+    float * scales = (float *) (q + nrow * row_bytes);
+    memset(q, 0, slice_size);
 
-    // Check environment variable for per-row mode (default: legacy per-tensor for backward compat)
-    static int per_row_mode = -1;
-    if (per_row_mode < 0) {
-        const char * env = getenv("BITNET_I2S_PER_ROW");
-        per_row_mode = (env != NULL && atoi(env) != 0) ? 1 : 0;  // default OFF
+    for (int64_t row = 0; row < nrow; ++row) {
+        const float * x = src + row * n_per_row;
+        double sum = 0.0;
+        for (int64_t j = 0; j < n_per_row; ++j) {
+            GGML_ASSERT(isfinite(x[j]));
+            sum += fabs((double) x[j]);
+        }
+        const float alpha = (float) (sum / n_per_row);
+        scales[row] = alpha;
+        for (int64_t j = 0; j < n_per_row; ++j) {
+            const float v = alpha > 0.0f ? x[j] / alpha : 0.0f;
+            // clip(round_ties_to_even(v), -1, 1): both +/-0.5 map to zero.
+            const uint8_t code = v > 0.5f ? 2 : v < -0.5f ? 0 : 1;
+            const size_t byte = row * row_bytes + (j/128)*32 + j%32;
+            q[byte] |= code << (6 - 2*((j%128)/32));
+        }
     }
-
-    uint8_t * q = (uint8_t *)dst;
-    memset(q, 0, n / 4);
-
-    if (per_row_mode) {
-        // Per-row TernarySEQ quantization
-        for (int64_t row = 0; row < nrow; row++) {
-            const float * row_src = src + row * n_per_row;
-
-            double row_max = 1e-5;
-            for (int64_t j = 0; j < n_per_row; j++) {
-                double v = fabs((double)row_src[j]);
-                if (v > row_max) row_max = v;
-            }
-
-            double inv_alpha = 1.0 / row_max;
-            double clip_ratio = 1.0 - 1e-2;
-            for (int64_t j = 0; j < n_per_row; j++) {
-                int64_t idx = row * n_per_row + j;
-                double val = (double)row_src[j] * inv_alpha;
-                if (val > clip_ratio) val = clip_ratio;
-                if (val < -clip_ratio) val = -clip_ratio;
-                int t = (int)round(val * 1.5);
-                if (t > 1) t = 1;
-                if (t < -1) t = -1;
-
-                uint8_t enc = (t == -1) ? 0 : (t == 0) ? 1 : 2;
-                int byte_idx = idx / 4;
-                int bit_pos = 6 - 2 * (idx % 4);
-                q[byte_idx] |= (enc << bit_pos);
-            }
-        }
-
-        // Store per-row scales (M floats)
-        float * scale_ptr = (float *)(q + n / 4);
-        for (int64_t row = 0; row < nrow; row++) {
-            const float * row_src = src + row * n_per_row;
-            double row_max = 1e-5;
-            for (int64_t j = 0; j < n_per_row; j++) {
-                double v = fabs((double)row_src[j]);
-                if (v > row_max) row_max = v;
-            }
-            scale_ptr[row] = (float)row_max;
-        }
-
-        int64_t scales_bytes = nrow * (int64_t)sizeof(float);
-        int64_t total = n / 4 + scales_bytes;
-        if (total % 32 != 0) total = total + (32 - total % 32);
-        return (size_t)total;
-
-    } else {
-        // Legacy per-tensor quantization
-        double max = 0.0;
-        for (int64_t i = 0; i < n; i++) {
-            double v = fabs((double)src[i]);
-            if (v > max) { max = v; break; }
-        }
-
-        for (int64_t i = 0; i < n; i++) {
-            uint8_t val;
-            if (fabs((double)src[i]) < 1e-6) {
-                val = 1;
-            } else {
-                val = ((double)src[i] * max > 0) ? 2 : 0;
-            }
-            int byte_idx = i / 4;
-            int bit_pos = 6 - 2 * (i % 4);
-            q[byte_idx] |= (val << bit_pos);
-        }
-
-        float * scale_ptr = (float *)(q + n / 4);
-        scale_ptr[0] = (float)max;
-
-        return nrow * n_per_row / 4 + 32;
-    }
+    return slice_size;
 }
 
 
 static void ggml_vec_dot_i2_i8_s_1x1(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+    GGML_ASSERT(n > 0 && n % 128 == 0);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(by);
+    const uint8_t * x = (const uint8_t *) vx;
+    const int8_t * y = (const int8_t *) vy;
+    // bx is the unpacked weight-row stride; nrc counts weight rows, not activations.
+    for (int row = 0; row < nrc; ++row) {
+        const uint8_t * x_row = x + row * (bx/4);
 #if defined(__AVX2__)
-    const uint8_t *    x = (uint8_t *)vx;
-    const int8_t  *    y = (int8_t *)vy;
-
-    const int nb = n / QK_I2_S;
-    const int group32_num = nb / 32;
-    const int la_num = nb % 32;
-    const int groupla_num = nb % 32 != 0 ? 1 : 0;
-    
-    __m256i mask = _mm256_set1_epi8(0x03);
-    __m256i one16 = _mm256_set1_epi16(1);
-
-    // 处理多行，nrc表示要处理的行数
-    for (int row = 0; row < nrc; row++) {
-        __m256i accu = _mm256_setzero_si256();
-        
-        // 计算当前行的x指针偏移
-        const uint8_t * x_row = x + row * bx / 4;
-        
-        for (int i = 0; i < group32_num; i++) {
-            const uint8_t *px = x_row + i * 1024;     // 32 * 32
-            const int8_t  *py = y + i * 4096;         // 32 * 128
-            __m256i accu32 = _mm256_setzero_si256();
-            
-            for (int j = 0; j < 32; j++) {
-                // 128 index
-                __m256i xq8_3 = _mm256_loadu_si256((const __m256i*)(px));
-                __m256i xq8_2 = _mm256_srli_epi16(xq8_3, 2);
-                __m256i xq8_1 = _mm256_srli_epi16(xq8_3, 4);
-                __m256i xq8_0 = _mm256_srli_epi16(xq8_3, 6);
-
-                // each 32 index
-                xq8_3 = _mm256_and_si256(xq8_3, mask);
-                xq8_2 = _mm256_and_si256(xq8_2, mask);
-                xq8_1 = _mm256_and_si256(xq8_1, mask);
-                xq8_0 = _mm256_and_si256(xq8_0, mask);
-
-                // each 32 index
-                __m256i yq8_0 = _mm256_loadu_si256((const __m256i*)(py));
-                __m256i yq8_1 = _mm256_loadu_si256((const __m256i*)(py + 32));
-                __m256i yq8_2 = _mm256_loadu_si256((const __m256i*)(py + 64));
-                __m256i yq8_3 = _mm256_loadu_si256((const __m256i*)(py + 96));
-
-                xq8_0 = _mm256_maddubs_epi16(xq8_0, yq8_0);
-                xq8_1 = _mm256_maddubs_epi16(xq8_1, yq8_1);
-                xq8_2 = _mm256_maddubs_epi16(xq8_2, yq8_2);
-                xq8_3 = _mm256_maddubs_epi16(xq8_3, yq8_3);
-
-                accu32 = _mm256_add_epi16(accu32, _mm256_add_epi16(xq8_0, xq8_1));
-                accu32 = _mm256_add_epi16(accu32, _mm256_add_epi16(xq8_2, xq8_3));
-
-                px += 32;
-                py += 128;
+        const __m256i mask = _mm256_set1_epi8(3);
+        __m256i acc = _mm256_setzero_si256();
+        for (int i = 0; i < n; i += 128) {
+            const __m256i packed = _mm256_loadu_si256((const __m256i *) (x_row + i/4));
+            const __m256i a[4] = {
+                _mm256_and_si256(_mm256_srli_epi16(packed, 6), mask),
+                _mm256_and_si256(_mm256_srli_epi16(packed, 4), mask),
+                _mm256_and_si256(_mm256_srli_epi16(packed, 2), mask),
+                _mm256_and_si256(packed, mask),
+            };
+#if defined(__AVXVNNI__) || (defined(__AVX512VNNI__) && defined(__AVX512VL__))
+            for (int j = 0; j < 4; ++j) {
+                const __m256i b = _mm256_loadu_si256((const __m256i *) (y + i + j*32));
+                acc = _mm256_dpbusd_epi32(acc, a[j], b);
             }
-            accu = _mm256_add_epi32(_mm256_madd_epi16(accu32, one16), accu);
-        }
-
-        for (int i = 0; i < groupla_num; i++) {
-            __m256i accula = _mm256_setzero_si256();
-            const uint8_t *px = x_row + group32_num * 1024; // 32 * 32
-            const int8_t  *py = y + group32_num * 4096;     // 32 * 128
-            
-            for (int j = 0; j < la_num; j++) {
-                // 128 index
-                __m256i xq8_3 = _mm256_loadu_si256((const __m256i*)(px));
-                __m256i xq8_2 = _mm256_srli_epi16(xq8_3, 2);
-                __m256i xq8_1 = _mm256_srli_epi16(xq8_3, 4);
-                __m256i xq8_0 = _mm256_srli_epi16(xq8_3, 6);
-
-                // each 32 index
-                xq8_3 = _mm256_and_si256(xq8_3, mask);
-                xq8_2 = _mm256_and_si256(xq8_2, mask);
-                xq8_1 = _mm256_and_si256(xq8_1, mask);
-                xq8_0 = _mm256_and_si256(xq8_0, mask);
-
-                // each 32 index
-                __m256i yq8_0 = _mm256_loadu_si256((const __m256i*)(py));
-                __m256i yq8_1 = _mm256_loadu_si256((const __m256i*)(py + 32));
-                __m256i yq8_2 = _mm256_loadu_si256((const __m256i*)(py + 64));
-                __m256i yq8_3 = _mm256_loadu_si256((const __m256i*)(py + 96));
-
-                xq8_0 = _mm256_maddubs_epi16(xq8_0, yq8_0);
-                xq8_1 = _mm256_maddubs_epi16(xq8_1, yq8_1);
-                xq8_2 = _mm256_maddubs_epi16(xq8_2, yq8_2);
-                xq8_3 = _mm256_maddubs_epi16(xq8_3, yq8_3);
-
-                accula = _mm256_add_epi16(accula, _mm256_add_epi16(xq8_0, xq8_1));
-                accula = _mm256_add_epi16(accula, _mm256_add_epi16(xq8_2, xq8_3));
-
-                px += 32;
-                py += 128;
-            }
-            accu = _mm256_add_epi32(accu, _mm256_madd_epi16(accula, one16));
-        }
-        
-        int sumi = hsum_i32_8(accu);
-        s[row] = (float)sumi;
-    }
 #else
-    // Scalar fallback
-    const uint8_t * x = (const uint8_t *)vx;
-    const int8_t * y  = (const int8_t *)vy;
-    static const int map2bit[4] = { -1, 0, 1, 0 };
-    for (int row = 0; row < nrc; row++) {
-        int32_t sum = 0;
-        for (int i = 0; i < n; i++) {
-            int byte_idx = i / 4;
-            int bit_pos = 6 - 2 * (i % 4);
-            int w = map2bit[(x[row * (n/4) + byte_idx] >> bit_pos) & 0x03];
-            sum += w * y[i];
-        }
-        s[row] = (float)sum;
-    }
+            __m256i sum16 = _mm256_setzero_si256();
+            for (int j = 0; j < 4; ++j) {
+                const __m256i b = _mm256_loadu_si256((const __m256i *) (y + i + j*32));
+                sum16 = _mm256_add_epi16(sum16, _mm256_maddubs_epi16(a[j], b));
+            }
+            // Widen every block before accumulating across K.
+            acc = _mm256_add_epi32(acc, _mm256_madd_epi16(sum16, _mm256_set1_epi16(1)));
 #endif
+        }
+        s[row] = (float) hsum_i32_8(acc);
+#else
+        int32_t sum = 0;
+        for (int i = 0; i < n; ++i) {
+            const int byte = (i/128)*32 + i%32;
+            const int shift = 6 - 2*((i%128)/32);
+            sum += ((x_row[byte] >> shift) & 3) * y[i];
+        }
+        s[row] = (float) sum;
+#endif
+    }
 }
 
 void ggml_vec_dot_i2_i8_s(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {

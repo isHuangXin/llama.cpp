@@ -218,6 +218,14 @@ struct split_strategy {
         ctx_meta(ctx_meta),
         n_tensors(gguf_get_n_tensors(ctx_gguf)) {
 
+        bool has_i2s = false;
+        for (int i = 0; i < n_tensors; ++i) {
+            if (gguf_get_tensor_type(ctx_gguf, i) == GGML_TYPE_I2_S) {
+                has_i2s = true;
+                break;
+            }
+        }
+
         // because we need to know list of tensors for each file in advance, we will build all the ctx_out for all output splits
         int i_split = -1;
         struct gguf_context * ctx_out = NULL;
@@ -234,6 +242,13 @@ struct split_strategy {
             // Save all metadata in first split only
             if (i_split == 0) {
                 gguf_set_kv(ctx_out, ctx_gguf);
+            } else if (has_i2s) {
+                // Each I2_S shard must expose its layout when opened independently.
+                const char * arch = gguf_get_val_str(ctx_gguf, gguf_find_key(ctx_gguf, "general.architecture"));
+                const std::string layout_key = std::string(arch) + ".tensor_data_layout";
+                gguf_set_val_str(ctx_out, "general.architecture", arch);
+                gguf_set_val_str(ctx_out, layout_key.c_str(),
+                    gguf_get_val_str(ctx_gguf, gguf_find_key(ctx_gguf, layout_key.c_str())));
             }
             gguf_set_val_u16(ctx_out, LLM_KV_SPLIT_NO, i_split);
             gguf_set_val_u16(ctx_out, LLM_KV_SPLIT_COUNT, 0); // placeholder

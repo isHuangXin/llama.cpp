@@ -318,6 +318,20 @@ class GGUFReader:
     def _build_tensors(self, start_offs: int, fields: list[ReaderField]) -> None:
         tensors = []
         tensor_names = set() # keep track of name to prevent duplicated tensors
+        tensor_limits = {}
+        if any(field.parts[4][0] == GGMLQuantizationType.I2_S for field in fields):
+            arch = self.get_field('general.architecture')
+            layout = self.get_field(f'{arch.contents()}.tensor_data_layout') if arch is not None else None
+            if (arch is None or arch.types != [GGUFValueType.STRING]
+                    or layout is None or layout.types != [GGUFValueType.STRING]
+                    or layout.contents() != 'i2_s_row_scale_v1'):
+                raise ValueError('I2_S requires general.architecture and its tensor_data_layout=i2_s_row_scale_v1; reconvert legacy files')
+            if self.endianess != GGUFEndian.LITTLE:
+                raise ValueError('I2_S row scales require little-endian GGUF; reconvert this file')
+            offsets = sorted(int(field.parts[5][0]) for field in fields)
+            if len(set(offsets)) != len(offsets):
+                raise ValueError('Overlapping tensor offsets in I2_S GGUF')
+            tensor_limits = dict(zip(offsets, offsets[1:] + [self.data.size - start_offs]))
         for field in fields:
             _name_len, name_data, _n_dims, dims, raw_dtype, offset_tensor = field.parts
             # check if there's any tensor having same name already in the list
@@ -356,10 +370,21 @@ class GGUFReader:
             else:
                 item_count = n_bytes
                 item_type = np.uint8
-                # I2_S/TL1/TL2: packed data with appended metadata, actual byte count
-                # differs from computed n_bytes. Use raw flat array without reshape.
-                if ggml_type in (GGMLQuantizationType.I2_S, GGMLQuantizationType.TL1, GGMLQuantizationType.TL2):
-                    # Compute actual bytes: n_elems/4 (2-bit packed) + 32 (scale + alignment)
+                if ggml_type == GGMLQuantizationType.I2_S:
+                    if len(np_dims) not in (2, 3) or any(n <= 0 for n in np_dims) or np_dims[-1] % 128 != 0:
+                        raise ValueError(f'I2_S tensor {tensor_name} requires [M,K] or [E,M,K] with K divisible by 128')
+                    rows, cols = np_dims[-2:]
+                    n_slices = np_dims[0] if len(np_dims) == 3 else 1
+                    slice_bytes = rows * cols // 4 + rows * 4
+                    n_bytes = n_slices * ((slice_bytes + 31) // 32 * 32)
+                    offset = int(offset_tensor[0])
+                    if (offset % self.alignment != 0 or data_offs + n_bytes > self.data.size
+                            or offset + n_bytes > tensor_limits[offset]):
+                        raise ValueError(f'Truncated, overlapping or misaligned I2_S tensor {tensor_name}')
+                    item_count = n_bytes
+                    np_dims = (n_bytes,)
+                elif ggml_type in (GGMLQuantizationType.TL1, GGMLQuantizationType.TL2):
+                    # Preserve the legacy TL metadata layout.
                     actual_bytes = n_elems // 4 + 32
                     item_count = actual_bytes
                     np_dims = (actual_bytes,)

@@ -1363,9 +1363,9 @@ class tinyBLAS_I2S_AVX {
                      int ith, int nth,
                      const float *act_scales = nullptr,
                      const int32_t *act_sums = nullptr,
-                     float weight_scale = 0.0f)
+                     const float *weight_scales = nullptr)
         : A(A), B(B), C(C), k(k), lda(lda), ldb(ldb), ldc(ldc), ith(ith), nth(nth),
-          act_scales(act_scales), act_sums(act_sums), weight_scale(weight_scale) {
+          act_scales(act_scales), act_sums(act_sums), weight_scales(weight_scales) {
     }
 
     void matmul(int64_t m, int64_t n) {
@@ -1416,7 +1416,7 @@ class tinyBLAS_I2S_AVX {
 
         // k is in elements; each 128 elements = 32 packed bytes for A
         const int64_t nb = k / 128;  // number of 128-element blocks
-        const int64_t a_row_bytes = k / 4;
+        const int64_t a_row_bytes = lda;
 
         for (int64_t job = start; job < end; ++job) {
             int64_t ii = m0 + job / xtiles * RM;
@@ -1484,7 +1484,7 @@ class tinyBLAS_I2S_AVX {
                     float dot = (float)_mm_cvtsi128_si32(
                         _mm_add_epi32(sum64, hi32));
                     if (act_scales) {
-                        dot = (dot - act_sums[jj + c]) * (weight_scale / act_scales[jj + c]);
+                        dot = (dot - act_sums[jj + c]) / act_scales[jj + c] * weight_scales[ii + r];
                     }
                     C[ldc * (jj + c) + (ii + r)] = dot;
                 }
@@ -1499,7 +1499,7 @@ class tinyBLAS_I2S_AVX {
     int ith, nth;
     const float *act_scales;
     const int32_t *act_sums;
-    float weight_scale;
+    const float *weight_scales;
 };
 #endif // __AVX2__
 
@@ -4187,21 +4187,9 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
 #endif
     }
 
-    case GGML_TYPE_I2_S: {
-        if (Btype != GGML_TYPE_I8_S)
-            return false;
-#if defined(__AVX2__)
-        tinyBLAS_I2S_AVX tb{
-            k, (const uint8_t *)A, lda,
-            (const int8_t *)B, ldb,
-            (float *)C, ldc,
-            params->ith, params->nth};
-        tb.matmul(m, n);
-        return true;
-#else
+    case GGML_TYPE_I2_S:
+        // I2_S requires row scales and activation metadata via llamafile_sgemm_i2s.
         return false;
-#endif
-    }
 
     default:
         return false;
@@ -4224,20 +4212,23 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
 
 bool llamafile_sgemm_i2s(const struct ggml_compute_params * params, int64_t m, int64_t n, int64_t k,
                          const void *A, int64_t lda, const void *B, int64_t ldb, void *C, int64_t ldc,
-                         const float *act_scales, const int32_t *act_sums, float weight_scale) {
+                         const float *act_scales, const int32_t *act_sums, const float *weight_scales) {
+    GGML_ASSERT(k > 0 && k % 128 == 0);
+    GGML_ASSERT(lda >= k/4 && ldb >= k && ldc >= m);
+    GGML_ASSERT(act_scales && act_sums && weight_scales);
 #if defined(__AVX2__)
     tinyBLAS_I2S_AVX tb{
         k, (const uint8_t *)A, lda,
         (const int8_t *)B, ldb,
         (float *)C, ldc,
         params->ith, params->nth,
-        act_scales, act_sums, weight_scale};
+        act_scales, act_sums, weight_scales};
     tb.matmul(m, n);
     return true;
 #else
     (void)params; (void)m; (void)n; (void)k;
     (void)A; (void)lda; (void)B; (void)ldb; (void)C; (void)ldc;
-    (void)act_scales; (void)act_sums; (void)weight_scale;
+    (void)act_scales; (void)act_sums; (void)weight_scales;
     return false;
 #endif
 }

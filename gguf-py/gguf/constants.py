@@ -99,6 +99,7 @@ class Keys:
         # Array based KV stores
         TAGS                       = "general.tags"
         LANGUAGES                  = "general.languages"
+        DATASETS                   = "general.datasets"
 
     class LLM:
         VOCAB_SIZE                        = "{arch}.vocab_size"
@@ -4636,9 +4637,9 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ4_XS        = 30  # except 1d tensors
     MOSTLY_IQ1_M         = 31  # except 1d tensors
     MOSTLY_BF16          = 32  # except 1d tensors
-    # MOSTLY_Q4_0_4_4      = 33  # removed from gguf files, use Q4_0 and runtime repack
-    # MOSTLY_Q4_0_4_8      = 34  # removed from gguf files, use Q4_0 and runtime repack
-    # MOSTLY_Q4_0_8_8      = 35  # removed from gguf files, use Q4_0 and runtime repack
+    MOSTLY_Q4_0_4_4      = 33  # legacy ID; use Q4_0 and runtime repack
+    MOSTLY_Q4_0_4_8      = 34  # legacy ID; use Q4_0 and runtime repack
+    MOSTLY_Q4_0_8_8      = 35  # legacy ID; use Q4_0 and runtime repack
     MOSTLY_TQ1_0         = 36  # except 1d tensors
     MOSTLY_TQ2_0         = 37  # except 1d tensors
     MOSTLY_MXFP4_MOE     = 38  # except 1d tensors
@@ -4647,54 +4648,6 @@ class LlamaFileType(IntEnum):
     MOSTLY_I2_S          = 41  # except 1d tensors
     MOSTLY_TL1           = 42
     MOSTLY_TL2           = 43
-
-    GUESSED              = 1024  # not specified in the model file
-
-
-# TODO: add GGMLFileType from ggml_ftype in ggml.h
-
-
-# from llama_ftype in llama.h
-# ALL VALUES SHOULD BE THE SAME HERE AS THEY ARE OVER THERE.
-class LlamaFileType(IntEnum):
-    ALL_F32              = 0
-    MOSTLY_F16           = 1   # except 1d tensors
-    MOSTLY_Q4_0          = 2   # except 1d tensors
-    MOSTLY_Q4_1          = 3   # except 1d tensors
-    # MOSTLY_Q4_1_SOME_F16 = 4   # tok_embeddings.weight and output.weight are F16
-    # MOSTLY_Q4_2        = 5   # support has been removed
-    # MOSTLY_Q4_3        = 6   # support has been removed
-    MOSTLY_Q8_0          = 7   # except 1d tensors
-    MOSTLY_Q5_0          = 8   # except 1d tensors
-    MOSTLY_Q5_1          = 9   # except 1d tensors
-    MOSTLY_Q2_K          = 10  # except 1d tensors
-    MOSTLY_Q3_K_S        = 11  # except 1d tensors
-    MOSTLY_Q3_K_M        = 12  # except 1d tensors
-    MOSTLY_Q3_K_L        = 13  # except 1d tensors
-    MOSTLY_Q4_K_S        = 14  # except 1d tensors
-    MOSTLY_Q4_K_M        = 15  # except 1d tensors
-    MOSTLY_Q5_K_S        = 16  # except 1d tensors
-    MOSTLY_Q5_K_M        = 17  # except 1d tensors
-    MOSTLY_Q6_K          = 18  # except 1d tensors
-    MOSTLY_IQ2_XXS       = 19  # except 1d tensors
-    MOSTLY_IQ2_XS        = 20  # except 1d tensors
-    MOSTLY_Q2_K_S        = 21  # except 1d tensors
-    MOSTLY_IQ3_XS        = 22  # except 1d tensors
-    MOSTLY_IQ3_XXS       = 23  # except 1d tensors
-    MOSTLY_IQ1_S         = 24  # except 1d tensors
-    MOSTLY_IQ4_NL        = 25  # except 1d tensors
-    MOSTLY_IQ3_S         = 26  # except 1d tensors
-    MOSTLY_IQ3_M         = 27  # except 1d tensors
-    MOSTLY_IQ2_S         = 28  # except 1d tensors
-    MOSTLY_IQ2_M         = 29  # except 1d tensors
-    MOSTLY_IQ4_XS        = 30  # except 1d tensors
-    MOSTLY_IQ1_M         = 31  # except 1d tensors
-    MOSTLY_BF16          = 32  # except 1d tensors
-    MOSTLY_Q4_0_4_4      = 33  # except 1d tensors
-    MOSTLY_Q4_0_4_8      = 34  # except 1d tensors
-    MOSTLY_Q4_0_8_8      = 35  # except 1d tensors
-    MOSTLY_TQ1_0         = 36  # except 1d tensors
-    MOSTLY_TQ2_0         = 37  # except 1d tensors
 
     GUESSED              = 1024  # not specified in the model file
 

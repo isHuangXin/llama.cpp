@@ -22,7 +22,7 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t, int64_t
 
 bool llamafile_sgemm_i2s(const struct ggml_compute_params * params, int64_t m, int64_t n, int64_t k,
                          const void *A, int64_t lda, const void *B, int64_t ldb, void *C, int64_t ldc,
-                         const float *act_scales, const int32_t *act_sums, float weight_scale);
+                         const float *act_scales, const int32_t *act_sums, const float *weight_scales);
 
 #ifdef __cplusplus
 }

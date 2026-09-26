@@ -616,6 +616,15 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
         }
     }
 
+    bool i2s_row_scale_layout = false;
+    const int64_t arch_idx = gguf_find_key(ctx, "general.architecture");
+    if (arch_idx >= 0 && gguf_get_kv_type(ctx, arch_idx) == GGUF_TYPE_STRING) {
+        const std::string layout_key = std::string(gguf_get_val_str(ctx, arch_idx)) + ".tensor_data_layout";
+        const int64_t layout_idx = gguf_find_key(ctx, layout_key.c_str());
+        i2s_row_scale_layout = layout_idx >= 0 && gguf_get_kv_type(ctx, layout_idx) == GGUF_TYPE_STRING &&
+            strcmp(gguf_get_val_str(ctx, layout_idx), "i2_s_row_scale_v1") == 0;
+    }
+
     // read the tensor info
     for (int64_t i = 0; ok && i < n_tensors; ++i) {
         struct gguf_tensor_info info;
@@ -703,6 +712,20 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                     __func__, info.t.name, info.t.type, GGML_TYPE_COUNT);
                 ok = false;
                 break;
+            }
+            if (info.t.type == GGML_TYPE_I2_S) {
+                if (!i2s_row_scale_layout) {
+                    GGML_LOG_ERROR("%s: I2_S tensor '%s' requires <architecture>.tensor_data_layout = "
+                        "i2_s_row_scale_v1; re-convert legacy I2_S files\n", __func__, info.t.name);
+                    ok = false;
+                    break;
+                }
+                if (info.t.ne[0] <= 0 || info.t.ne[0] % 128 != 0) {
+                    GGML_LOG_ERROR("%s: I2_S tensor '%s' requires a positive row length divisible by 128\n",
+                        __func__, info.t.name);
+                    ok = false;
+                    break;
+                }
             }
             const size_t  type_size = ggml_type_size(info.t.type);
             const int64_t blck_size = ggml_blck_size(info.t.type);

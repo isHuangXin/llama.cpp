@@ -23,16 +23,14 @@
 #include "gemm-config.h"
 
 void ggml_gemv_i2_i8_s(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined(ACT_PARALLEL)
-    for (int64_t iir0 = 0; iir0 < nc; iir0 += 1) {
-        ggml_vec_dot_i2_i8_s(n, s + iir0, 1, (const uint8_t *)vx + iir0 * n / 4, n, vy, 0, 1);
-    }
-#else
+    GGML_ASSERT(n > 0 && n % 128 == 0);
+    GGML_ASSERT(nr == 1);
+    GGML_UNUSED(bs);
     const int64_t blck_0 = 16;
     for (int64_t iir0 = 0; iir0 < nc; iir0 += blck_0) {
-        ggml_vec_dot_i2_i8_s(n, s + iir0, 1, (const uint8_t *)vx + iir0 * n / 4, n, vy, 0, blck_0);
+        const int nrows = MIN(blck_0, nc - iir0);
+        ggml_vec_dot_i2_i8_s(n, s + iir0, 1, (const uint8_t *)vx + iir0 * n / 4, n, vy, 0, nrows);
     }
-#endif
 }
 
 void ggml_gemm_i2_i8_s(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
@@ -42,6 +40,8 @@ void ggml_gemm_i2_i8_s(int n, float * GGML_RESTRICT s, size_t bs, const void * G
     // vx = weight data (I2_S, 2-bit packed, nc rows, each n/4 bytes)
     // vy = activation data (I8_S, nr columns, each n bytes)
     // s  = output, s[col * bs + row], where col indexes B columns, row indexes A rows
+    GGML_ASSERT(n > 0 && n % 128 == 0);
+    GGML_ASSERT(bs >= (size_t) nc);
 
 #if defined(__AVX2__)
     const uint8_t * x = (const uint8_t *)vx;
@@ -180,40 +180,9 @@ void ggml_gemm_i2_i8_s(int n, float * GGML_RESTRICT s, size_t bs, const void * G
         }
     }
 #else
-    // Scalar / non-AVX2 fallback: use vec_dot row by row
-    const int64_t row_block = ROW_BLOCK_SIZE;
-    const int64_t col_block = COL_BLOCK_SIZE;
-
-#if defined(ACT_PARALLEL)
-    for (int64_t c0 = 0; c0 < nc; c0 += col_block) {
-        int64_t cur_c = (c0 + col_block <= nc) ? col_block : (nc - c0);
-        for (int64_t r0 = 0; r0 < nr; r0 += row_block) {
-            int64_t cur_r = (r0 + row_block <= nr) ? row_block : (nr - r0);
-            const void * vy_r = (const uint8_t *)vy + r0 * n;
-            for (int64_t c = 0; c < cur_c; ++c) {
-                const int64_t col = c0 + c;
-                float * s_col = s + col;
-                const void * vx_col = (const uint8_t *)vx + col * n / 4;
-                ggml_vec_dot_i2_i8_s(n, s_col + r0 * bs, bs, vx_col, n, vy_r, n, cur_r);
-            }
-        }
+    for (int c = 0; c < nr; ++c) {
+        ggml_gemv_i2_i8_s(n, s + c*bs, bs, vx, (const int8_t *) vy + (int64_t) c*n, 1, nc);
     }
-#else
-    for (int64_t r0 = 0; r0 < nr; r0 += row_block) {
-        int64_t cur_r = (r0 + row_block <= nr) ? row_block : (nr - r0);
-        const void * vy_row = (const uint8_t *)vy + r0 * n;
-        for (int64_t c0 = 0; c0 < nc; c0 += col_block) {
-            int64_t cur_c = (c0 + col_block <= nc) ? col_block : (nc - c0);
-            for (int64_t r = 0; r < cur_r; ++r) {
-                const int64_t row = r0 + r;
-                float * s_row = s + row * bs;
-                const void * vy_cur = (const uint8_t *)vy_row + r * n;
-                const void * vx_c = (const uint8_t *)vx + c0 * n / 4;
-                ggml_vec_dot_i2_i8_s(n, s_row + c0, bs, vx_c, n, vy_cur, n, cur_c);
-            }
-        }
-    }
-#endif
 #endif // __AVX2__
 }
 

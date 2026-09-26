@@ -61,6 +61,14 @@ static inline int ggml_up32(int n) {
     return (n + 31) & ~31;
 }
 
+static inline size_t ggml_i2s_slice_size(int64_t ncols, int64_t nrows) {
+    GGML_ASSERT(ncols > 0 && ncols % 128 == 0 && nrows > 0);
+    GGML_ASSERT((uint64_t) ncols <= SIZE_MAX);
+    const size_t row_bytes = (size_t) ncols / 4 + sizeof(float);
+    GGML_ASSERT((uint64_t) nrows <= (SIZE_MAX - 31) / row_bytes);
+    return ((size_t) nrows * row_bytes + 31) & ~(size_t) 31;
+}
+
 //static inline int ggml_up64(int n) {
 //    return (n + 63) & ~63;
 //}

@@ -4874,15 +4874,14 @@ static void ggml_compute_forward_get_rows_i2_s(
     const int nth = params->nth;
 
     // rows per thread
-    const int dr = (nr + nth - 1)/nth;
+    const int64_t dr = (nr + nth - 1)/nth;
 
     // row range for this thread
-    const int ir0 = dr*ith;
-    const int ir1 = MIN(ir0 + dr, nr);
+    const int64_t ir0 = dr*ith;
+    const int64_t ir1 = MIN(ir0 + dr, nr);
 
     const uint8_t * base = (const uint8_t *) src0->data;
-    const size_t packed_bytes_total = (size_t) (ggml_nelements(src0) / 4);
-    const float  scl = *(const float *)(base + packed_bytes_total);
+    const size_t slice_size = ggml_i2s_slice_size(ne00, ne01);
 
     for (int64_t i = ir0; i < ir1; ++i) {
         const int64_t i12 = i/(ne11*ne10);
@@ -4892,9 +4891,10 @@ static void ggml_compute_forward_get_rows_i2_s(
 
         GGML_ASSERT(i01 >= 0 && i01 < ne01);
 
-        dequantize_row_i2_s(
-                (const uint8_t *) ((char *) src0->data + i01*nb01/4 + i11*nb02/4 + i12*nb03/4),
-                     (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc, scl);
+        const uint8_t * slice = base + (i11 + i12*ne02)*slice_size;
+        const float * scales = (const float *) (slice + ne01*(ne00/4));
+        dequantize_row_i2_s(slice + i01*(ne00/4),
+                          (float *) ((char *) dst->data + i10*nb1 + i11*nb2 + i12*nb3), nc, scales[i01]);
     }
 }
 

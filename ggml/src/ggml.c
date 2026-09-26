@@ -933,7 +933,8 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = 1,
         .type_size                = sizeof(int8_t),
         .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_i2_s,
+        // Row scales need the complete matrix; GET_ROWS supplies the scale explicitly.
+        .to_float                 = NULL,
     },
     [GGML_TYPE_I8_S] = {
         .type_name                = "i8_s",
@@ -1315,13 +1316,10 @@ size_t ggml_nbytes(const struct ggml_tensor * tensor) {
         }
         // BitNet I2_S/TL1/TL2: special nbytes for packed weight data
         if (tensor->type == GGML_TYPE_I2_S) {
-            // I2_S packs 4 elements per byte + per-row scales (M floats, padded to 32 bytes)
-            const int64_t n_per_row = tensor->ne[0];
-            const int64_t nrows = tensor->ne[1];
+            const size_t slice_bytes = ggml_i2s_slice_size(tensor->ne[0], tensor->ne[1]);
             const int64_t n_slices = tensor->ne[2] * tensor->ne[3];
-            int64_t slice_bytes = (int64_t)nrows * n_per_row / 4 + nrows * (int64_t)sizeof(float);
-            if (slice_bytes % 32 != 0) slice_bytes = slice_bytes + (32 - slice_bytes % 32);
-            nbytes = (size_t)slice_bytes * n_slices;
+            GGML_ASSERT((uint64_t) n_slices <= SIZE_MAX / slice_bytes);
+            nbytes = slice_bytes * (size_t) n_slices;
         } else if (tensor->type == GGML_TYPE_TL1) {
             // TL1 packs 4 elements per byte + 32 bytes header
             const int64_t n_per_row = tensor->ne[0];
@@ -7177,7 +7175,7 @@ void ggml_build_backward_expand(
 static void * incr_ptr_aligned(void ** p, size_t size, size_t align) {
     void * ptr = *p;
     ptr = (void *) GGML_PAD((uintptr_t) ptr, align);
-    *p = (void *) ((char *) ptr + size);
+    *p = (void *) ((uintptr_t) ptr + size);
     return ptr;
 }
 
@@ -7820,7 +7818,9 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_Q6_K:    result = quantize_q6_K   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TQ1_0:   result = quantize_tq1_0  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_TQ2_0:   result = quantize_tq2_0  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        case GGML_TYPE_I2_S:    result = quantize_i2_s   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_I2_S:
+            GGML_ABORT("I2_S requires whole-matrix packing; use convert-qwen36-to-gguf-bitnet.py");
+            break;
         case GGML_TYPE_IQ2_XXS: result = quantize_iq2_xxs(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ2_XS:  result = quantize_iq2_xs (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ3_XXS: result = quantize_iq3_xxs(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
@@ -7852,12 +7852,7 @@ size_t ggml_quantize_chunk(
             assert(false);
     }
 
-    if (type == GGML_TYPE_I2_S) {
-        // I2_S: per-row mode or legacy mode, just check result is reasonable
-        GGML_ASSERT(result >= (size_t)(nrows * row_size / 4 + 32));
-    } else {
-        GGML_ASSERT(result == nrows * row_size);
-    }
+    GGML_ASSERT(result == nrows * row_size);
 
     return result;
 }
