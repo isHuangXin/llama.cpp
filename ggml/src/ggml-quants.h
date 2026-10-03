@@ -42,11 +42,11 @@ GGML_API void quantize_row_iq3_s_ref  (const float * GGML_RESTRICT x, block_iq3_
 GGML_API void quantize_row_iq2_s_ref  (const float * GGML_RESTRICT x, block_iq2_s   * GGML_RESTRICT y, int64_t k);
 
 // BitNet I2_S quantization
-void quantize_row_i8_s     (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k, float * n, int32_t * sum);
-void quantize_row_i8_s_4x1 (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k, float * n, int32_t * sum);
-void dequantize_row_i2_s   (const uint8_t * x, float * y, int64_t n, const float i2_scale);
-void ggml_vec_dot_i2_i8_s  (int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc);
-size_t quantize_i2_s       (const float * src, void * dst, int64_t nrow, int64_t n_per_row, const float * quant_weights);
+GGML_API void quantize_row_i8_s     (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k, float * n, int32_t * sum);
+GGML_API void quantize_row_i8_s_4x1 (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k, float * n, int32_t * sum);
+GGML_API void dequantize_row_i2_s   (const uint8_t * x, float * y, int64_t n, const float i2_scale);
+GGML_API void ggml_vec_dot_i2_i8_s  (int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc);
+GGML_API size_t quantize_i2_s       (const float * src, void * dst, int64_t nrow, int64_t n_per_row, const float * quant_weights);
 
 // Dequantization
 GGML_API void dequantize_row_q1_0(const block_q1_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
