@@ -284,17 +284,20 @@ llama_model_gemma3::graph<iswa>::graph(const llama_model & model, const llm_grap
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    // embeddings-only contexts never read logits: skip the full-vocab lm_head
+    if (!cparams.embeddings) {
+        // lm_head
+        cur = build_lora_mm(model.output, cur, model.output_s);
 
-    if (hparams.f_final_logit_softcapping) {
-        cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
-        cur = ggml_tanh(ctx0, cur);
-        cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
+        if (hparams.f_final_logit_softcapping) {
+            cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
+            cur = ggml_tanh(ctx0, cur);
+            cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
+        }
+
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
     }
-
-    cb(cur, "result_output", -1);
-    res->t_logits = cur;
 
     ggml_build_forward_expand(gf, cur);
 }
